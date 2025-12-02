@@ -1,0 +1,991 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Silly Goober Ecosystem (v2)</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, query, limit, orderBy } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+
+        // Set Firebase Log Level to Debug for easier development
+        setLogLevel('Debug');
+
+        // --- GLOBAL VARIABLES (Provided by Canvas Environment) ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-goober-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        // Export globals needed by the main script
+        window.firebase = { db, auth, appId, initialAuthToken };
+        window.firebase.setDoc = setDoc;
+        window.firebase.doc = doc;
+        window.firebase.onSnapshot = onSnapshot;
+        window.firebase.collection = collection;
+        window.firebase.query = query;
+        window.firebase.limit = limit;
+        window.firebase.orderBy = orderBy;
+        window.firebase.getDoc = getDoc;
+        window.firebase.signInWithCustomToken = signInWithCustomToken;
+        window.firebase.signInAnonymously = signInAnonymously;
+        window.firebase.onAuthStateChanged = onAuthStateChanged;
+
+        console.log("Firebase initialized.");
+
+    </script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f7f7f7; }
+        #simulationCanvas {
+            /* Standardized canvas size */
+            width: 600px; 
+            height: 600px;
+            border: 2px solid #10b981;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            background-color: #88c070; /* Default background for the map */
+        }
+        /* Custom scrollbar for stats panel */
+        .stats-scroll::-webkit-scrollbar { width: 8px; }
+        .stats-scroll::-webkit-scrollbar-thumb { background: #34d399; border-radius: 4px; }
+        .stats-scroll::-webkit-scrollbar-track { background: #e0f2f1; }
+    </style>
+</head>
+<body class="p-4 sm:p-8 flex flex-col items-center">
+
+    <h1 class="text-4xl font-extrabold text-teal-600 mb-6">Silly Goober Evolution (v2: AI Priority)</h1>
+
+    <div id="messageBox" class="w-full max-w-5xl bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded-lg mb-4 hidden" role="alert">
+        <strong id="messageTitle" class="font-bold"></strong>
+        <span id="messageText" class="block sm:inline"></span>
+        <button onclick="document.getElementById('messageBox').classList.add('hidden')" class="float-right font-bold">&times;</button>
+    </div>
+
+    <div class="flex flex-col lg:flex-row w-full max-w-5xl gap-6">
+
+        <!-- Simulation Area -->
+        <div class="lg:w-3/4 w-full flex flex-col items-center">
+            <!-- Adjusted width/height for square canvas -->
+            <canvas id="simulationCanvas" width="600" height="600" class="w-full max-w-[600px] h-auto rounded-xl"></canvas>
+
+            <!-- Controls -->
+            <div class="mt-4 flex flex-col sm:flex-row justify-between items-center gap-3 w-full max-w-[600px]">
+                <div class="flex gap-3">
+                    <button id="startButton" class="px-6 py-3 bg-teal-500 hover:bg-teal-600 text-white font-semibold rounded-lg shadow-md transition duration-200">Start Simulation</button>
+                    <button id="resetButton" class="px-6 py-3 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-lg shadow-md transition duration-200">Reset</button>
+                </div>
+                <div class="flex items-center gap-3">
+                    <label for="speedSlider" class="font-medium text-gray-700">Speed (ms):</label>
+                    <input type="range" id="speedSlider" min="50" max="500" value="150" class="w-24">
+                    <span id="speedValue" class="font-bold text-teal-600">150</span>
+                </div>
+                <div class="text-sm font-medium text-gray-600">Cycle: <span id="cycleCount" class="font-bold text-teal-600">0</span></div>
+            </div>
+        </div>
+
+        <!-- Stats & Info Panel -->
+        <div class="lg:w-1/4 w-full bg-white p-4 rounded-xl shadow-lg">
+            <h2 class="text-xl font-bold text-gray-800 mb-4 border-b pb-2">Simulation Stats</h2>
+            <p class="text-sm text-gray-600">Total Goobers: <span id="gooberCount" class="font-bold text-teal-600">0</span></p>
+            <p class="text-sm text-gray-600">Active Plants: <span id="plantCount" class="font-bold text-teal-600">0</span></p>
+            <p class="text-sm text-gray-600 mb-4">Goober ID: <span id="currentUserId" class="font-bold text-teal-600 text-xs break-all">Authenticating...</span></p>
+            
+            <h3 class="text-lg font-semibold text-gray-700 mt-4 mb-2">Selected Goober Info</h3>
+            <div id="selectedGooberInfo" class="text-xs text-gray-500 stats-scroll max-h-64 overflow-y-auto">
+                Click a Goober on the map to see its details and traits.
+            </div>
+        </div>
+    </div>
+    
+    <!-- Footer for Firestore Data -->
+    <div class="w-full max-w-5xl mt-6 p-4 bg-gray-100 rounded-xl shadow-inner text-sm text-gray-700">
+        <h3 class="font-bold text-lg mb-2 text-teal-700">Persistent World Data</h3>
+        <p>This simulator saves the best-performing Goober to the global environment data every 50 cycles to influence future runs. Check the console for save/load status.</p>
+        <p class="mt-2 text-xs">
+            *Data storage path: <code>/artifacts/{appId}/public/data/goober_evolution/best_goober</code>
+        </p>
+    </div>
+
+    <script>
+        // Use an IIFE (Immediately Invoked Function Expression) to keep variables local
+        (function() {
+            // --- CONSTANTS (ADJUSTED FOR VISIBILITY/ACTIVITY) ---
+            const CANVAS_SIZE = 600; // Standardized to 600x600
+            const TILE_SIZE = 40;
+            const GRID_SIZE = CANVAS_SIZE / TILE_SIZE; // 15x15 grid
+            const MAX_GOOBERS = 100;
+            const INITIAL_GOOBERS = 25;
+            const INITIAL_PLANTS = 150;
+            const MAX_TRAIT = 100;
+            const MIN_TRAIT = 1;
+            const MUTATION_RANGE = 5;
+            
+            // Goober and Plant appearance constants
+            const GOOBER_RADIUS = 10;
+            const BASE_PLANT_RADIUS = 3; 
+            const MAX_PLANT_RADIUS = 6;
+            
+            // --- UI ELEMENTS & CANVAS SETUP ---
+            const canvas = document.getElementById('simulationCanvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = CANVAS_SIZE;
+            canvas.height = CANVAS_SIZE; 
+
+            const startButton = document.getElementById('startButton');
+            const resetButton = document.getElementById('resetButton');
+            const speedSlider = document.getElementById('speedSlider');
+            const speedValueSpan = document.getElementById('speedValue');
+            const cycleCountSpan = document.getElementById('cycleCount');
+            const gooberCountSpan = document.getElementById('gooberCount');
+            const plantCountSpan = document.getElementById('plantCount');
+            const selectedGooberInfoDiv = document.getElementById('selectedGooberInfo');
+            const currentUserIdSpan = document.getElementById('currentUserId');
+
+            // --- SIMULATION STATE ---
+            let simulationInterval = null;
+            let currentCycle = 0;
+            let goobers = [];
+            let plants = [];
+            let selectedGoober = null;
+            let isRunning = false;
+            let simulationSpeed = 150; // ms per cycle
+
+            // --- FIREBASE GLOBALS ---
+            let db, auth, appId, userId;
+
+            // --- MAP/BIOME CONFIG ---
+            const WATER_TILE = { color: '#60a5fa', moveCost: 1, plantRate: 0.1, name: 'Puddle Oasis', isWater: true, isSleepSpot: false };
+            // New Sleep Spot: A cozy corner biome
+            const REST_SPOT = { color: '#e0f2f1', moveCost: 1, plantRate: 0.1, name: 'Cozy Corner', isWater: false, isSleepSpot: true };
+            const BIOMES = {
+                GRASSLAND: { color: '#4ade80', moveCost: 1, plantRate: 0.5, name: 'Grassland', isWater: false, isSleepSpot: false },
+                FOREST: { color: '#16a34a', moveCost: 2, plantRate: 0.3, name: 'Forest', isWater: false, isSleepSpot: false },
+                DESERT: { color: '#fcd34d', moveCost: 3, plantRate: 0.1, name: 'Desert', isWater: false, isSleepSpot: false },
+                MOUNTAIN: { color: '#a1a1aa', moveCost: 5, plantRate: 0.05, name: 'Mountain', isWater: false, isSleepSpot: false } 
+            };
+            
+            // Map trait names to silly names for display
+            const SILLY_TRAIT_NAMES = {
+                strength: 'Goo-Brawn',
+                intelligence: 'Noodle-Brain Power',
+                speed: 'Zoominess',
+                sight: 'Squintiness',
+                charm: 'Swoon Factor',
+                water_tolerance: 'Bladder Resilience',
+                wakefulness: 'Nap Resistance' // New trait name related to sleepiness
+            };
+
+            const biomeMap = Array.from({ length: GRID_SIZE }, () => Array(GRID_SIZE).fill(BIOMES.GRASSLAND));
+
+            // --- UTILITY FUNCTIONS ---
+
+            function showMessage(title, text, type = 'yellow') {
+                const box = document.getElementById('messageBox');
+                box.className = `w-full max-w-5xl px-4 py-3 rounded-lg mb-4`;
+                document.getElementById('messageTitle').textContent = title;
+                document.getElementById('messageText').textContent = text;
+                box.classList.remove('hidden');
+
+                if (type === 'error') {
+                     box.classList.add('bg-red-100', 'border-red-400', 'text-red-700');
+                } else if (type === 'success') {
+                     box.classList.add('bg-green-100', 'border-green-400', 'text-green-700');
+                } else {
+                     box.classList.add('bg-yellow-100', 'border-yellow-400', 'text-yellow-700');
+                }
+            }
+
+            const clamp = (num, min, max) => Math.max(min, Math.min(num, max));
+
+            const getBiome = (x, y) => {
+                const gridX = Math.floor(x / TILE_SIZE);
+                const gridY = Math.floor(y / TILE_SIZE);
+                if (gridX >= 0 && gridX < GRID_SIZE && gridY >= 0 && gridY < GRID_SIZE) {
+                    return biomeMap[gridY][gridX];
+                }
+                return BIOMES.GRASSLAND;
+            };
+            
+            const getTileCenter = (x, y) => {
+                const centerX = x * TILE_SIZE + TILE_SIZE / 2;
+                const centerY = y * TILE_SIZE + TILE_SIZE / 2;
+                return { x: centerX, y: centerY };
+            }
+
+            // --- ENTITY CLASSES ---
+
+            class Goober {
+                constructor(x, y, traits, parentIds = []) {
+                    this.id = crypto.randomUUID();
+                    this.x = x;
+                    this.y = y;
+                    this.energy = MAX_TRAIT; 
+                    this.thirst = 0; // 0 = hydrated, 100 = critical
+                    this.sleepiness = 0; // 0 = rested, 100 = passed out (New)
+                    this.age = 0;
+                    this.traits = traits || this.generateRandomTraits();
+                    this.color = this.generateColorFromTraits();
+                    this.parentId1 = parentIds[0] || 'Genesis';
+                    this.parentId2 = parentIds[1] || 'Genesis';
+                    this.isSelected = false;
+                    this.action = 'Waddling aimlessly';
+                }
+
+                generateRandomTraits() {
+                    return {
+                        strength: Math.floor(Math.random() * (MAX_TRAIT / 2)) + (MAX_TRAIT / 4),
+                        intelligence: Math.floor(Math.random() * (MAX_TRAIT / 2)) + (MAX_TRAIT / 4),
+                        speed: Math.floor(Math.random() * (MAX_TRAIT / 2)) + (MAX_TRAIT / 4),
+                        sight: Math.floor(Math.random() * (MAX_TRAIT / 2)) + (MAX_TRAIT / 4),
+                        charm: Math.floor(Math.random() * (MAX_TRAIT / 2)) + (MAX_TRAIT / 4),
+                        water_tolerance: Math.floor(Math.random() * (MAX_TRAIT / 2)) + (MAX_TRAIT / 4), 
+                        wakefulness: Math.floor(Math.random() * (MAX_TRAIT / 2)) + (MAX_TRAIT / 4), // New trait
+                    };
+                }
+
+                generateColorFromTraits() {
+                    const r = clamp(Math.floor(this.traits.strength * 2.55), 0, 255);
+                    const g = clamp(Math.floor(this.traits.speed * 2.55), 0, 255);
+                    const b = clamp(Math.floor(this.traits.intelligence * 2.55), 0, 255);
+                    return `rgb(${r},${g},${b})`;
+                }
+
+                // --- CORE AI & MECHANICS ---
+
+                // Calculate the 'Urgency Score' for a given need (Max = 100)
+                getUrgency() {
+                    return {
+                        hunger: this.energy < 50 ? 100 - this.energy : 0, // Hunger is inverse of Energy
+                        thirst: this.thirst,
+                        sleepiness: this.sleepiness,
+                        reproduction: this.age > 10 && this.energy > 80 ? this.traits.charm * 0.5 : 0 // Only reproduce if viable
+                    };
+                }
+
+                move() {
+                    const biome = getBiome(this.x, this.y);
+
+                    // --- Passive Need Update (Metabolic/Thirst/Sleep) ---
+                    // Thirst increases based on biome difficulty and inverse of water_tolerance
+                    this.thirst = clamp(this.thirst + 1 + (biome.moveCost / 10) - (this.traits.water_tolerance / 200), 0, MAX_TRAIT);
+                    // Sleepiness increases based on energy use and inverse of wakefulness
+                    this.sleepiness = clamp(this.sleepiness + 0.1 + (this.energy / 500) - (this.traits.wakefulness / 500), 0, MAX_TRAIT);
+
+                    // Critical failure check
+                    if (this.energy <= 0 || this.thirst >= 100 || this.sleepiness >= 100) {
+                        this.action = 'Gasping for Goo / Passed Out';
+                        return;
+                    }
+
+                    // --- Penalty Checks ---
+                    if (this.thirst > 70) this.energy -= 0.5;
+                    if (this.sleepiness > 70) this.energy -= 0.5;
+
+                    // --- AI DECISION PRIORITY ---
+                    const urgencies = this.getUrgency();
+                    const priorityNeed = Object.keys(urgencies).reduce((a, b) => urgencies[a] > urgencies[b] ? a : b);
+                    const maxUrgency = urgencies[priorityNeed];
+
+                    let targetX, targetY;
+                    let targetFound = false;
+
+                    // 1. Critical Override (Low Energy/High Urgency)
+                    if (this.energy < 15 || maxUrgency > 50) {
+                        switch (priorityNeed) {
+                            case 'thirst':
+                                const nearestWater = this.findNearestWater();
+                                if (nearestWater.dist < this.traits.sight * 5) {
+                                    targetX = nearestWater.x;
+                                    targetY = nearestWater.y;
+                                    targetFound = true;
+                                    this.action = 'Panicked Scramble for Juice';
+                                }
+                                break;
+                            case 'hunger': // This is primarily satisfied by finding Plants
+                                const nearestPlant = this.findNearestPlant();
+                                if (nearestPlant.plant && nearestPlant.dist < this.traits.sight * 5) {
+                                    targetX = nearestPlant.plant.x;
+                                    targetY = nearestPlant.plant.y;
+                                    targetFound = true;
+                                    this.action = 'Sniffing out Snacks';
+                                }
+                                break;
+                            case 'sleepiness':
+                                const nearestRest = this.findNearestRestSpot();
+                                if (nearestRest.dist < this.traits.sight * 5) {
+                                    targetX = nearestRest.x;
+                                    targetY = nearestRest.y;
+                                    targetFound = true;
+                                    this.action = 'Dragging Goo to Bed';
+                                } else {
+                                    // If no rest spot, just look for a quiet corner (wander)
+                                    this.action = 'Too tired to care';
+                                }
+                                break;
+                            case 'reproduction':
+                                const nearestMate = this.findNearestMate();
+                                if (nearestMate.mate && nearestMate.dist < this.traits.sight * 5) {
+                                    targetX = nearestMate.mate.x;
+                                    targetY = nearestMate.mate.y;
+                                    targetFound = true;
+                                    this.action = 'Awkwardly Flirting';
+                                }
+                                break;
+                        }
+                    }
+
+                    // 2. Fallback: Wander
+                    if (!targetFound) {
+                        targetX = this.x + (Math.random() - 0.5) * TILE_SIZE * 0.8; 
+                        targetY = this.y + (Math.random() - 0.5) * TILE_SIZE * 0.8;
+                        this.action = 'Waddling aimlessly';
+                    }
+
+                    // --- Movement Execution ---
+                    let effectiveSpeed = clamp(this.traits.speed - biome.moveCost * 5, 5, MAX_TRAIT);
+                    
+                    // Thirst and Sleepiness penalties reduce speed
+                    effectiveSpeed *= (1 - (this.thirst / MAX_TRAIT));
+                    effectiveSpeed *= (1 - (this.sleepiness / MAX_TRAIT));
+                    effectiveSpeed = clamp(effectiveSpeed, 1, MAX_TRAIT);
+                    
+                    const moveDistance = effectiveSpeed / 10;
+                    const energyCost = biome.moveCost + (effectiveSpeed / MAX_TRAIT);
+
+                    this.energy -= energyCost / 10;
+                    
+                    const dx = targetX - this.x;
+                    const dy = targetY - this.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+
+                    if (dist > 1) {
+                        this.x += (dx / dist) * moveDistance;
+                        this.y += (dy / dist) * moveDistance;
+                    }
+                    
+                    this.x = clamp(this.x, 0, CANVAS_SIZE);
+                    this.y = clamp(this.y, 0, CANVAS_SIZE);
+                }
+                
+                findNearestWater() {
+                    let closest = { dist: Infinity, x: null, y: null };
+                    for (let y = 0; y < GRID_SIZE; y++) {
+                        for (let x = 0; x < GRID_SIZE; x++) {
+                            if (biomeMap[y][x].isWater) {
+                                const center = getTileCenter(x, y);
+                                const dist = Math.sqrt(Math.pow(this.x - center.x, 2) + Math.pow(this.y - center.y, 2));
+                                if (dist < closest.dist) closest = { dist, x: center.x, y: center.y };
+                            }
+                        }
+                    }
+                    return closest;
+                }
+                
+                findNearestRestSpot() {
+                    let closest = { dist: Infinity, x: null, y: null };
+                    for (let y = 0; y < GRID_SIZE; y++) {
+                        for (let x = 0; x < GRID_SIZE; x++) {
+                            if (biomeMap[y][x].isSleepSpot) {
+                                const center = getTileCenter(x, y);
+                                const dist = Math.sqrt(Math.pow(this.x - center.x, 2) + Math.pow(this.y - center.y, 2));
+                                if (dist < closest.dist) closest = { dist, x: center.x, y: center.y };
+                            }
+                        }
+                    }
+                    // If no explicit rest spot, return own location to rest anywhere
+                    if (closest.dist === Infinity) return { dist: 0, x: this.x, y: this.y }; 
+                    return closest;
+                }
+                
+                findNearestPlant() {
+                     return plants.reduce((closest, plant) => {
+                        const dist = Math.sqrt(Math.pow(this.x - plant.x, 2) + Math.pow(this.y - plant.y, 2));
+                        if (dist < closest.dist && plant.currentNutrients > 0) {
+                            return { dist, plant };
+                        }
+                        return closest;
+                    }, { dist: Infinity, plant: null });
+                }
+
+                findNearestMate() {
+                    return goobers.reduce((closest, mate) => {
+                        if (mate.id !== this.id && mate.energy > 50 && mate.age > 10) {
+                            const dist = Math.sqrt(Math.pow(this.x - mate.x, 2) + Math.pow(this.y - mate.y, 2));
+                            if (dist < closest.dist) {
+                                return { dist, mate };
+                            }
+                        }
+                        return closest;
+                    }, { dist: Infinity, mate: null });
+                }
+
+                eat() {
+                    for (let i = 0; i < plants.length; i++) {
+                        const plant = plants[i];
+                        const dist = Math.sqrt(Math.pow(this.x - plant.x, 2) + Math.pow(this.y - plant.y, 2));
+                        
+                        if (dist < TILE_SIZE && plant.currentNutrients > 0) {
+                            const energyNeeded = MAX_TRAIT - this.energy;
+                            const nutrientsConsumed = Math.min(energyNeeded, plant.currentNutrients, 15);
+                            
+                            this.energy = clamp(this.energy + nutrientsConsumed, 0, MAX_TRAIT);
+                            plant.currentNutrients -= nutrientsConsumed;
+                            
+                            this.action = 'Munching loudly';
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                
+                drink() {
+                    const biome = getBiome(this.x, this.y);
+                    if (biome.isWater) {
+                        this.thirst = clamp(this.thirst - 30, 0, MAX_TRAIT); // Drink 30 units
+                        this.action = 'Gulping Goo-Juice';
+                        return true;
+                    }
+                    return false;
+                }
+                
+                sleep() {
+                    const biome = getBiome(this.x, this.y);
+                    if (biome.isSleepSpot || biome.name === 'Grassland') { // Can sleep in Grassland too, but faster in Rest Spot
+                        const restGain = biome.isSleepSpot ? 40 : 20;
+                        const energyGain = biome.isSleepSpot ? 5 : 2;
+
+                        this.sleepiness = clamp(this.sleepiness - restGain, 0, MAX_TRAIT); 
+                        this.energy = clamp(this.energy + energyGain, 0, MAX_TRAIT); 
+                        this.action = 'Zzz... Resting Goo-dly';
+                        return true;
+                    }
+                    return false;
+                }
+
+                checkBreed(otherGoober) {
+                    if (this.id === otherGoober.id) return false;
+
+                    if (this.energy < 70 || otherGoober.energy < 70 || this.age < 10 || otherGoober.age < 10 || this.thirst > 40 || otherGoober.thirst > 40 || this.sleepiness > 40) {
+                        return false; 
+                    }
+
+                    const dist = Math.sqrt(Math.pow(this.x - otherGoober.x, 2) + Math.pow(this.y - otherGoober.y, 2));
+                    if (dist > TILE_SIZE * 2) return false;
+
+                    const avgCharm = (this.traits.charm + otherGoober.traits.charm) / 2;
+                    const breedChance = avgCharm / MAX_TRAIT;
+
+                    if (Math.random() < breedChance / 15) {
+                        this.action = 'The Deed is Done';
+                        return true;
+                    }
+
+                    return false;
+                }
+
+                breed(otherGoober) {
+                    this.energy -= 40; 
+                    otherGoober.energy -= 40;
+
+                    const newTraits = {};
+                    for (const key in this.traits) {
+                        if (this.traits.hasOwnProperty(key)) {
+                            let avg = (this.traits[key] + otherGoober.traits[key]) / 2;
+                            let mutated = avg + (Math.random() * MUTATION_RANGE * 2) - MUTATION_RANGE;
+                            newTraits[key] = clamp(Math.round(mutated), MIN_TRAIT, MAX_TRAIT);
+                        }
+                    }
+
+                    const newGoober = new Goober(this.x, this.y, newTraits, [this.id, otherGoober.id]);
+                    return newGoober;
+                }
+            }
+
+            class Plant {
+                constructor(x, y, maxNutrients = 30) {
+                    this.x = x;
+                    this.y = y;
+                    this.maxNutrients = maxNutrients;
+                    this.currentNutrients = maxNutrients;
+                }
+                
+                grow() {
+                    this.currentNutrients = clamp(this.currentNutrients + 0.5, 0, this.maxNutrients);
+                }
+            }
+
+            // --- MAP GENERATION ---
+
+            function generateBiomes() {
+                for (let y = 0; y < GRID_SIZE; y++) {
+                    for (let x = 0; x < GRID_SIZE; x++) {
+                        biomeMap[y][x] = BIOMES.GRASSLAND;
+                    }
+                }
+                
+                const coreBiomeTypes = [BIOMES.FOREST, BIOMES.DESERT, BIOMES.MOUNTAIN];
+                const numFeatures = 8;
+                for (let i = 0; i < numFeatures; i++) {
+                    const biome = coreBiomeTypes[Math.floor(Math.random() * coreBiomeTypes.length)];
+                    const size = Math.floor(Math.random() * 5) + 3; 
+                    const startX = Math.floor(Math.random() * (GRID_SIZE - size));
+                    const startY = Math.floor(Math.random() * (GRID_SIZE - size));
+
+                    for (let x = startX; x < startX + size; x++) {
+                        for (let y = startY; y < startY + size; y++) {
+                            if (y >= 0 && y < GRID_SIZE && x >= 0 && x < GRID_SIZE) {
+                                biomeMap[y][x] = biome;
+                            }
+                        }
+                    }
+                }
+                
+                // Introduce Water Tiles (Puddle Oases)
+                for (let i = 0; i < 5; i++) { 
+                    const startX = Math.floor(Math.random() * (GRID_SIZE - 2));
+                    const startY = Math.floor(Math.random() * (GRID_SIZE - 2));
+                    for (let x = startX; x < startX + 2; x++) {
+                        for (let y = startY; y < startY + 2; y++) {
+                            if (y >= 0 && y < GRID_SIZE && x >= 0 && x < GRID_SIZE) {
+                                if (biomeMap[y][x] !== BIOMES.MOUNTAIN) {
+                                    biomeMap[y][x] = WATER_TILE;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Introduce Rest Spots (Cozy Corners)
+                for (let i = 0; i < 3; i++) { 
+                    const startX = Math.floor(Math.random() * (GRID_SIZE - 3));
+                    const startY = Math.floor(Math.random() * (GRID_SIZE - 3));
+                    for (let x = startX; x < startX + 3; x++) {
+                        for (let y = startY; y < startY + 3; y++) {
+                            if (y >= 0 && y < GRID_SIZE && x >= 0 && x < GRID_SIZE) {
+                                if (biomeMap[y][x] === BIOMES.GRASSLAND) {
+                                    biomeMap[y][x] = REST_SPOT;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                console.log("Biomes generated (including Puddle Oases and Cozy Corners).");
+            }
+
+            // --- SIMULATION LOGIC ---
+
+            function initializeSimulation(fromData = []) {
+                currentCycle = 0;
+                goobers = [];
+                plants = [];
+                generateBiomes();
+
+                if (fromData.length > 0) {
+                    fromData.forEach(data => {
+                        const newGoober = new Goober(
+                            Math.random() * CANVAS_SIZE,
+                            Math.random() * CANVAS_SIZE,
+                            data.traits
+                        );
+                        for (const key in newGoober.traits) {
+                            newGoober.traits[key] = clamp(newGoober.traits[key] + (Math.random() * MUTATION_RANGE * 2) - MUTATION_RANGE, MIN_TRAIT, MAX_TRAIT);
+                        }
+                        goobers.push(newGoober);
+                    });
+                    showMessage('World Loaded!', `Started with ${fromData.length} Goobers based on the previous best evolution!`);
+                } else {
+                    for (let i = 0; i < INITIAL_GOOBERS; i++) {
+                        goobers.push(new Goober(
+                            Math.random() * CANVAS_SIZE,
+                            Math.random() * CANVAS_SIZE
+                        ));
+                    }
+                    showMessage('New World', `Starting a new simulation with ${INITIAL_GOOBERS} random Goobers.`);
+                }
+                
+                for (let i = 0; i < INITIAL_PLANTS; i++) {
+                    spawnPlant(true);
+                }
+
+                render();
+                updateStats();
+            }
+
+            function spawnPlant(initial = false) {
+                let x, y;
+                let attempts = 0;
+                do {
+                    x = Math.floor(Math.random() * GRID_SIZE);
+                    y = Math.floor(Math.random() * GRID_SIZE);
+                    attempts++;
+                } while (attempts < 50 && plants.some(p => Math.floor(p.x / TILE_SIZE) === x && Math.floor(p.y / TILE_SIZE) === y && p.currentNutrients > 0));
+
+                if (attempts < 50) {
+                    const biome = biomeMap[y][x];
+                    if (initial || Math.random() < biome.plantRate) {
+                        const plantX = x * TILE_SIZE + TILE_SIZE / 2;
+                        const plantY = y * TILE_SIZE + TILE_SIZE / 2;
+                        plants.push(new Plant(plantX, plantY));
+                    }
+                }
+            }
+
+            function simulationCycle() {
+                if (!isRunning) return;
+
+                currentCycle++;
+
+                const newGoobers = [];
+
+                plants.forEach(plant => plant.grow());
+
+                for (let i = goobers.length - 1; i >= 0; i--) {
+                    const goober = goobers[i];
+                    goober.age++;
+
+                    // Critical Death Check
+                    if (goober.energy <= 0 || goober.thirst >= 100 || goober.sleepiness >= 100) {
+                        if (goober.isSelected) selectedGoober = null;
+                        goobers.splice(i, 1);
+                        continue;
+                    }
+
+                    // Main Life Cycle
+                    goober.move();
+                    goober.eat(); // Goober tries to eat if near a plant
+                    goober.drink(); // Goober tries to drink if on a water tile
+                    goober.sleep(); // Goober tries to sleep if on a rest spot or grassland
+
+                    // Check for potential mates
+                    for (let j = i - 1; j >= 0; j--) {
+                        const mate = goobers[j];
+                        if (goober.checkBreed(mate) && goobers.length < MAX_GOOBERS) {
+                            newGoobers.push(goober.breed(mate));
+                        }
+                    }
+                }
+
+                // Add newly bred Goobers
+                goobers.push(...newGoobers);
+
+                if (currentCycle % 50 === 0) {
+                    spawnPlant();
+                }
+
+                if (currentCycle % 50 === 0 && goobers.length > 0) {
+                    saveBestGoober();
+                }
+
+                render();
+                updateStats();
+
+                if (goobers.length === 0) {
+                    stopSimulation();
+                    showMessage('Extinction Event!', 'All Goobers have died. Hit Reset to start a new world.', 'error');
+                }
+            }
+
+            // --- DRAWING/RENDERING ---
+
+            function render() {
+                ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+
+                // 1. Draw Biomes (Map)
+                for (let y = 0; y < GRID_SIZE; y++) {
+                    for (let x = 0; x < GRID_SIZE; x++) {
+                        const biome = biomeMap[y][x];
+                        ctx.fillStyle = biome.color;
+                        ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                    }
+                }
+
+                // 2. Draw Plants
+                plants.forEach(plant => {
+                    const nutrientRatio = plant.currentNutrients / plant.maxNutrients;
+                    const radius = BASE_PLANT_RADIUS + (MAX_PLANT_RADIUS - BASE_PLANT_RADIUS) * nutrientRatio;
+                    
+                    const colorValue = Math.floor(150 + nutrientRatio * 105); 
+                    ctx.fillStyle = `rgb(5, ${colorValue}, 105)`;
+
+                    ctx.beginPath();
+                    ctx.arc(plant.x, plant.y, radius, 0, Math.PI * 2);
+                    ctx.fill();
+                });
+
+                // 3. Draw Goobers (with silly eye)
+                goobers.forEach(goober => {
+                    // Goober circle (main body)
+                    ctx.beginPath();
+                    ctx.arc(goober.x, goober.y, GOOBER_RADIUS, 0, Math.PI * 2);
+                    ctx.fillStyle = goober.color;
+                    ctx.fill();
+                    
+                    // SILLY EYE: 
+                    const eyeRadius = GOOBER_RADIUS * 0.4;
+                    ctx.fillStyle = 'white';
+                    ctx.beginPath();
+                    const offset = goober.color === 'black' ? -GOOBER_RADIUS * 0.3 : GOOBER_RADIUS * 0.3;
+                    ctx.arc(goober.x + offset, goober.y - GOOBER_RADIUS * 0.3, eyeRadius, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Pupil
+                    const pupilRadius = eyeRadius * 0.4;
+                    ctx.fillStyle = 'black';
+                    ctx.beginPath();
+                    ctx.arc(goober.x + offset + GOOBER_RADIUS * 0.1, goober.y - GOOBER_RADIUS * 0.4, pupilRadius, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    
+                    // --- Status Bars ---
+                    const BAR_WIDTH = 20;
+                    const BAR_HEIGHT = 2;
+                    const BAR_OFFSET = GOOBER_RADIUS + 2;
+                    
+                    // Energy bar (Green, Top)
+                    const energyWidth = (goober.energy / MAX_TRAIT) * BAR_WIDTH;
+                    ctx.fillStyle = '#e5e7eb'; // Background
+                    ctx.fillRect(goober.x - GOOBER_RADIUS, goober.y + BAR_OFFSET, BAR_WIDTH, BAR_HEIGHT);
+                    ctx.fillStyle = goober.energy > 30 ? '#34d399' : '#ef4444'; // Value
+                    ctx.fillRect(goober.x - GOOBER_RADIUS, goober.y + BAR_OFFSET, energyWidth, BAR_HEIGHT);
+                    
+                    // Thirst bar (Blue, Middle)
+                    const thirstWidth = (goober.thirst / MAX_TRAIT) * BAR_WIDTH;
+                    ctx.fillStyle = '#e5e7eb'; // Background
+                    ctx.fillRect(goober.x - GOOBER_RADIUS, goober.y + BAR_OFFSET + 3, BAR_WIDTH, BAR_HEIGHT);
+                    ctx.fillStyle = goober.thirst < 50 ? '#60a5fa' : '#f87171'; // Value (Blue=Good, Red=Bad)
+                    ctx.fillRect(goober.x - GOOBER_RADIUS, goober.y + BAR_OFFSET + 3, thirstWidth, BAR_HEIGHT);
+                    
+                    // Sleepiness bar (Purple, Bottom)
+                    const sleepWidth = (goober.sleepiness / MAX_TRAIT) * BAR_WIDTH;
+                    ctx.fillStyle = '#e5e7eb'; // Background
+                    ctx.fillRect(goober.x - GOOBER_RADIUS, goober.y + BAR_OFFSET + 6, BAR_WIDTH, BAR_HEIGHT);
+                    ctx.fillStyle = goober.sleepiness < 50 ? '#c084fc' : '#f97316'; // Value (Purple=Good, Orange=Bad)
+                    ctx.fillRect(goober.x - GOOBER_RADIUS, goober.y + BAR_OFFSET + 6, sleepWidth, BAR_HEIGHT);
+
+
+                    // Selection glow
+                    if (goober.isSelected) {
+                        ctx.strokeStyle = '#f59e0b';
+                        ctx.lineWidth = 3;
+                        ctx.stroke();
+                    }
+                });
+            }
+
+            // --- UI & CONTROL FUNCTIONS ---
+
+            function startSimulation() {
+                if (isRunning) {
+                    isRunning = false;
+                    clearInterval(simulationInterval);
+                    startButton.textContent = 'Resume Simulation';
+                } else {
+                    isRunning = true;
+                    simulationInterval = setInterval(simulationCycle, simulationSpeed);
+                    startButton.textContent = 'Pause Simulation';
+                }
+            }
+
+            function stopSimulation() {
+                isRunning = false;
+                clearInterval(simulationInterval);
+                startButton.textContent = 'Start Simulation';
+            }
+
+            function resetSimulation() {
+                stopSimulation();
+                loadGlobalGooberData().then(gooberData => {
+                    initializeSimulation(gooberData);
+                    startButton.textContent = 'Start Simulation';
+                }).catch(() => {
+                    initializeSimulation([]);
+                    startButton.textContent = 'Start Simulation';
+                });
+            }
+
+            function updateStats() {
+                cycleCountSpan.textContent = currentCycle;
+                gooberCountSpan.textContent = goobers.length;
+                plantCountSpan.textContent = plants.filter(p => p.currentNutrients > 0).length;
+
+                if (selectedGoober) {
+                    const urgencies = selectedGoober.getUrgency();
+                    const priorityNeed = Object.keys(urgencies).reduce((a, b) => urgencies[a] > urgencies[b] ? a : b);
+
+                    selectedGooberInfoDiv.innerHTML = `
+                        <p class="font-bold text-gray-700">ID: <span class="text-xs break-all">${selectedGoober.id.substring(0, 8)}...</span></p>
+                        <p class="text-lg text-teal-700 font-extrabold my-1">Action: ${selectedGoober.action}</p>
+                        <p class="text-sm text-red-500 font-bold">TOP PRIORITY: ${priorityNeed.toUpperCase()} (${urgencies[priorityNeed].toFixed(1)})</p>
+                        <hr class="my-2"/>
+                        <p>Energy (Hunger): <span class="font-bold text-green-600">${selectedGoober.energy.toFixed(1)}/${MAX_TRAIT}</span> <span class="text-xs text-gray-400">(Survival Goo)</span></p>
+                        <p>Thirst: <span class="font-bold text-blue-600">${selectedGoober.thirst.toFixed(1)}/${MAX_TRAIT}</span> <span class="text-xs text-gray-400">(Goo-Juice Required)</span></p>
+                        <p>Sleepiness: <span class="font-bold text-purple-600">${selectedGoober.sleepiness.toFixed(1)}/${MAX_TRAIT}</span> <span class="text-xs text-gray-400">(Nap Time)</span></p>
+                        <p>Age: <span class="font-bold">${selectedGoober.age} cycles (A Goo-d Age!)</span></p>
+                        <hr class="my-2"/>
+                        <p class="font-bold text-teal-600">TRAITS (Max ${MAX_TRAIT})</p>
+                        <p>• ${SILLY_TRAIT_NAMES.strength}: ${selectedGoober.traits.strength}</p>
+                        <p>• ${SILLY_TRAIT_NAMES.intelligence}: ${selectedGoober.traits.intelligence}</p>
+                        <p>• ${SILLY_TRAIT_NAMES.speed}: ${selectedGoober.traits.speed}</p>
+                        <p>• ${SILLY_TRAIT_NAMES.sight}: ${selectedGoober.traits.sight}</p>
+                        <p>• ${SILLY_TRAIT_NAMES.charm}: ${selectedGoober.traits.charm}</p>
+                        <p>• ${SILLY_TRAIT_NAMES.water_tolerance}: ${selectedGoober.traits.water_tolerance}</p>
+                        <p>• ${SILLY_TRAIT_NAMES.wakefulness}: ${selectedGoober.traits.wakefulness}</p>
+                        <hr class="my-2"/>
+                        <p class="font-bold text-teal-600">LINEAGE</p>
+                        <p>Parent 1: ${selectedGoober.parentId1.substring(0, 8)}...</p>
+                        <p>Parent 2: ${selectedGoober.parentId2.substring(0, 8)}...</p>
+                    `;
+                } else {
+                    selectedGooberInfoDiv.innerHTML = 'Click a Goober on the map to see its details and traits.';
+                }
+            }
+
+            // --- EVENT LISTENERS (Same as before) ---
+
+            startButton.addEventListener('click', startSimulation);
+            resetButton.addEventListener('click', resetSimulation);
+            
+            speedSlider.addEventListener('input', (e) => {
+                simulationSpeed = parseInt(e.target.value);
+                speedValueSpan.textContent = simulationSpeed;
+                if (isRunning) {
+                    clearInterval(simulationInterval);
+                    simulationInterval = setInterval(simulationCycle, simulationSpeed);
+                }
+            });
+
+            canvas.addEventListener('click', (e) => {
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+
+                const clickX = (e.clientX - rect.left) * scaleX;
+                const clickY = (e.clientY - rect.top) * scaleY;
+
+                let clickedGoober = null;
+                for (const goober of goobers) {
+                    const dist = Math.sqrt(Math.pow(goober.x - clickX, 2) + Math.pow(goober.y - clickY, 2));
+                    if (dist < 15) {
+                        clickedGoober = goober;
+                        break;
+                    }
+                }
+
+                if (selectedGoober) {
+                    selectedGoober.isSelected = false;
+                }
+                
+                selectedGoober = clickedGoober;
+                if (selectedGoober) {
+                    selectedGoober.isSelected = true;
+                }
+
+                render();
+                updateStats();
+            });
+
+
+            // --- FIRESTORE PERSISTENCE (Same as before) ---
+
+            async function saveBestGoober() {
+                if (!db || !userId || goobers.length === 0) return;
+
+                const bestGoober = goobers.reduce((best, current) => {
+                    // Score = Age * 5 + Sum of all traits
+                    const currentScore = current.age * 5 + Object.values(current.traits).reduce((a, b) => a + b, 0) / 10; 
+                    const bestScore = best.age * 5 + Object.values(best.traits).reduce((a, b) => a + b, 0) / 10;
+                    return currentScore > bestScore ? current : best;
+                }, goobers[0]);
+                
+                if (!bestGoober) return;
+
+                const gooberData = {
+                    gooberId: bestGoober.id,
+                    age: bestGoober.age,
+                    traits: bestGoober.traits,
+                    savedByUserId: userId,
+                    timestamp: Date.now()
+                };
+
+                const docPath = `artifacts/${appId}/public/data/goober_evolution/best_goober`;
+
+                try {
+                    await window.firebase.setDoc(window.firebase.doc(db, docPath), gooberData);
+                    console.log(`[Firestore] Saved best Goober (${bestGoober.id.substring(0, 4)}...)`);
+                } catch (error) {
+                    console.error("[Firestore] Error saving best Goober:", error);
+                }
+            }
+
+            async function loadGlobalGooberData() {
+                if (!db) return [];
+
+                const docPath = `artifacts/${appId}/public/data/goober_evolution/best_goober`;
+                
+                try {
+                    const docSnap = await window.firebase.getDoc(window.firebase.doc(db, docPath));
+                    
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        console.log(`[Firestore] Loaded global best Goober from user ${data.savedByUserId.substring(0, 4)}...`);
+                        return [data];
+                    } else {
+                        console.log("[Firestore] No previous global best Goober found.");
+                        return [];
+                    }
+                } catch (error) {
+                    console.error("[Firestore] Error loading global Goober data:", error);
+                    return [];
+                }
+            }
+
+
+            // --- INITIALIZATION ---
+
+            async function init() {
+                if (typeof window.firebase === 'undefined') {
+                    setTimeout(init, 500);
+                    return;
+                }
+
+                ({ db, auth, appId } = window.firebase);
+                
+                try {
+                    if (window.firebase.initialAuthToken) {
+                        await window.firebase.signInWithCustomToken(auth, window.firebase.initialAuthToken);
+                    } else {
+                        await window.firebase.signInAnonymously(auth);
+                    }
+                } catch (error) {
+                    showMessage('Error', 'Authentication failed. Data persistence may not work.', 'error');
+                }
+
+                window.firebase.onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        currentUserIdSpan.textContent = userId;
+                        const gooberData = await loadGlobalGooberData();
+                        initializeSimulation(gooberData);
+                    } else {
+                        userId = 'guest-' + crypto.randomUUID().substring(0, 8);
+                        currentUserIdSpan.textContent = userId + ' (Guest)';
+                        initializeSimulation([]);
+                    }
+                });
+            }
+
+            window.onload = init;
+
+        })(); // End of IIFE
+    </script>
+</body>
+</html>
