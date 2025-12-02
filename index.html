@@ -187,7 +187,7 @@
         const gridY = Math.floor(y / TILE_SIZE);
 
         if (gridX >= 0 && gridX < GRID_SIZE && gridY >= 0 && gridY < GRID_SIZE) {
-            // FIX: Access the biome using the integer gridY and gridX indices
+            // Correctly access the biome using integer gridY and gridX indices
             return { x: gridX, y: gridY, biome: mapGrid[gridY][gridX] };
         }
         // Return default biome if out of bounds
@@ -609,8 +609,7 @@
                 return;
             }
 
-            // 1. Aging (Decrease Health) - Killber hunger decays at the full rate (0.0006), 
-            // but thirst decays slightly slower to make hunting for food the main focus.
+            // 1. Aging (Decrease Health)
             this.hunger = Math.max(0, this.hunger - KILLBER_DECAY_RATE); 
             this.thirst = Math.max(0, this.thirst - KILLBER_DECAY_RATE * 0.5);
 
@@ -643,14 +642,14 @@
             gooberList.forEach(goober => {
                 const dist = distance(this.x, this.y, goober.x, goober.y);
                 if (dist < bestTarget.dist) {
-                    minDist = dist;
+                    // FIX: Removed the incorrect 'minDist = dist;' line which caused a ReferenceError
                     bestTarget = { dist, prey: goober };
                 }
             });
 
             if (bestTarget.prey) {
                 // If the target is the same as the previous frame, update its coordinates (chase)
-                if (this.target && this.target.prey === bestTarget.prey) {
+                if (this.target && this.target.type === 'prey' && this.target.prey === bestTarget.prey) {
                     this.target.x = bestTarget.prey.x;
                     this.target.y = bestTarget.prey.y;
                 } else {
